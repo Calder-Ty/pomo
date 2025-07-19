@@ -1,0 +1,14 @@
+.{
+    .name = .pomo,
+    .version = "0.0.0",
+    .fingerprint = 0x4ae9abe7fdf4894, // Changing this has security and trust implications.
+    .minimum_zig_version = "0.14.0",
+    .dependencies = .{},
+    .paths = .{
+        "src/",
+        "build.zig",
+        "build.zig.zon",
+        "LICENSE",
+        "README.md",
+    },
+}
