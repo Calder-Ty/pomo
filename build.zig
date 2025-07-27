@@ -5,11 +5,11 @@ pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const version_str = "0.0.0";
+    const version_str = "0.1.0";
     const version = try std.SemanticVersion.parse(version_str);
 
     const api_source_file = b.path("src/pomo.zig");
-    const root_source_file = b.path("src/main.zig");
+    const daemon_source_file = b.path("src/main.zig");
 
     // Public API module
     const api_mod = b.addModule("pomo", .{
@@ -18,11 +18,11 @@ pub fn build(b: *std.Build) !void {
         .root_source_file = api_source_file,
     });
 
-    // Root module
-    const root_mod = b.createModule(.{
+    // Daemon module
+    const pomod_mod = b.createModule(.{
         .target = target,
         .optimize = optimize,
-        .root_source_file = root_source_file,
+        .root_source_file = daemon_source_file,
         .strip = b.option(bool, "strip", "Strip the binary"),
     });
 
@@ -30,9 +30,9 @@ pub fn build(b: *std.Build) !void {
     const exe_run_step = b.step("run", "Run executable");
 
     const exe = b.addExecutable(.{
-        .name = "pomo",
+        .name = "pomod",
         .version = version,
-        .root_module = root_mod,
+        .root_module = pomod_mod,
     });
     b.installArtifact(exe);
 
@@ -82,7 +82,7 @@ pub fn build(b: *std.Build) !void {
             .root_module = b.createModule(.{
                 .target = b.resolveTargetQuery(try std.Build.parseTargetQuery(.{ .arch_os_abi = RELEASE_TRIPLE })),
                 .optimize = .ReleaseSafe,
-                .root_source_file = root_source_file,
+                .root_source_file = daemon_source_file,
                 .strip = true,
             }),
         });
