@@ -1,33 +1,39 @@
+//! A Linux Utility for keeping track of a pomodoro timer
+//! This is more of a toy for me to play around with Unix Domain sockets
+//! And Signal Handlers. I don't know if using a long running process is
+//! really worth it.
+
 pub fn main() !void {
     const action: posix.Sigaction = .{
-
-};
-    posix.sigaction(posix.SIG.INT, , noalias oact: ?*Sigaction)
+        .handler = .{ .handler = &handle_interrupt },
+        .mask = @splat(0),
+        .flags = 0,
+    };
+    posix.sigaction(posix.SIG.INT, &action, null);
     // Become background process
-    // if (try posix.fork() != 0) std.process.exit(0);
-    // _ = std.os.linux.setsid();
+    if (try posix.fork() != 0) std.process.exit(0);
+    _ = std.os.linux.setsid();
 
     // Not Session Leader
-    // if (try posix.fork() != 0) std.process.exit(0);
-    // _ = umask(0);
-    // try std.posix.chdir("/");
+    if (try posix.fork() != 0) std.process.exit(0);
+    _ = umask(0);
+    try std.posix.chdir("/");
 
-    // Close open fd
-    // Here we just take the number that is in std.c.Darwin (ie the maximum for Mac)
-    // It's just a guess as I don't know the syscall1 to make for this. And it
-    // is something that could be known at compile time.
-    // for (0..10240) |fd| {
-    // std.posix.close(@intCast(@as(u32, @truncate(fd))));
-    // }
-
-    // std.posix.close(posix.STDIN_FILENO);
-    // const fd = try posix.open("/dev/null", .{ .ACCMODE = .RDWR }, 0);
-    // if (fd != posix.STDIN_FILENO) {
-    // return error.InvalidFileNo;
-    // }
-    // try std.posix.dup2(posix.STDIN_FILENO, posix.STDOUT_FILENO);
-    // try std.posix.dup2(posix.STDIN_FILENO, posix.STDERR_FILENO);
+    // Reroute STDOUT/STDERR to DEV NULL
+    std.posix.close(posix.STDIN_FILENO);
+    const fd = try posix.open("/dev/null", .{ .ACCMODE = .RDWR }, 0);
+    if (fd != posix.STDIN_FILENO) {
+        return error.InvalidFileNo;
+    }
+    try std.posix.dup2(posix.STDIN_FILENO, posix.STDOUT_FILENO);
+    try std.posix.dup2(posix.STDIN_FILENO, posix.STDERR_FILENO);
     try runServer();
+}
+
+export fn handle_interrupt(signal: i32) void {
+    _ = signal;
+    posix.unlink(well_known_address) catch {};
+    posix.exit(1);
 }
 
 // TODO: Handle if linked to libc
@@ -74,21 +80,24 @@ fn runServer() !void {
         const cmd = tokens.first();
         if (std.mem.eql(u8, "start", cmd)) {
             log.debug("Recieved Start Command", .{});
+            if (timer != null) {
+                _ = posix.write(cfd, "5") catch continue;
+                continue;
+            }
             const long_str = tokens.next() orelse {
-                _ = posix.write(cfd, "-1") catch continue;
+                _ = posix.write(cfd, "1") catch continue;
                 continue;
             };
             const short_str = tokens.next() orelse {
-                _ = posix.write(cfd, "-1") catch continue;
+                _ = posix.write(cfd, "2") catch continue;
                 continue;
             };
-
             const long = std.fmt.parseInt(i64, long_str, 10) catch {
-                _ = posix.write(cfd, "-1") catch continue;
+                _ = posix.write(cfd, "3") catch continue;
                 continue;
             };
             const short = std.fmt.parseInt(i64, short_str, 10) catch {
-                _ = posix.write(cfd, "-1") catch continue;
+                _ = posix.write(cfd, "4") catch continue;
                 continue;
             };
             timer = .init(long, short);
@@ -99,7 +108,7 @@ fn runServer() !void {
                 const status = t.status(std.time.timestamp());
                 log.debug("{any}", .{status});
                 status.serialize(writer) catch {
-                    _ = writer.write("-1") catch continue;
+                    _ = writer.write("-2") catch continue;
                     continue;
                 };
             } else {
