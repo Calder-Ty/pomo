@@ -5,7 +5,7 @@ pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const version_str = "0.1.0";
+    const version_str = "0.2.0";
     const version = try std.SemanticVersion.parse(version_str);
 
     const api_source_file = b.path("src/pomo.zig");
@@ -31,7 +31,7 @@ pub fn build(b: *std.Build) !void {
 
     const exe = b.addExecutable(.{
         .name = "pomod",
-        .version = version,
+        // .version = version,
         .root_module = pomod_mod,
     });
     b.installArtifact(exe);
@@ -46,7 +46,7 @@ pub fn build(b: *std.Build) !void {
     const tests_step = b.step("test", "Run test suite");
 
     const tests = b.addTest(.{
-        .version = version,
+        // .version = version,
         .root_module = api_mod,
     });
 

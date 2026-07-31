@@ -10,8 +10,8 @@ pub const PomoRecord = struct {
     /// Length of Resting Time
     short_seconds: i64,
 
-    pub fn init(long: i64, short: i64) PomoRecord {
-        const start_time = std.time.timestamp();
+    pub fn init(io: Io, long: i64, short: i64) PomoRecord {
+        const start_time = Io.Timestamp.now(io, .real).toSeconds();
         return .{
             .start_time = start_time,
             .long_seconds = long,
@@ -53,7 +53,8 @@ pub const PomoRecord = struct {
     }
 
     test status {
-        var pomo = PomoRecord.init(100, 10);
+        const io = testing.io;
+        var pomo = PomoRecord.init(io, 100, 10);
         // To make it work, set the start time direclty
         pomo.start_time = 0;
 
@@ -77,7 +78,7 @@ pub const PomoStatus = struct {
     seconds_remaining: i64,
     sessions_complete: u8,
 
-    pub fn serialize(self: @This(), writer: anytype) !void {
+    pub fn serialize(self: @This(), writer: *std.Io.Writer) !void {
         try writer.print("{d} {d} {d}", .{
             @intFromEnum(self.state),
             self.seconds_remaining,
@@ -90,6 +91,8 @@ const PomoState = enum(u1) { working, resting };
 
 const std = @import("std");
 const testing = std.testing;
+
+const Io = std.Io;
 
 test {
     _ = PomoRecord;

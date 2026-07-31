@@ -3,7 +3,7 @@
 //! And Signal Handlers. I don't know if using a long running process is
 //! really worth it.
 
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
     const action: posix.Sigaction = .{
         .handler = .{ .handler = &handle_interrupt },
         .mask = @splat(0),
@@ -11,67 +11,73 @@ pub fn main() !void {
     };
     posix.sigaction(posix.SIG.INT, &action, null);
     // Become background process
-    if (try posix.fork() != 0) std.process.exit(0);
+    if (posix.errno(linux.fork()) != .SUCCESS) exit(0);
     _ = std.os.linux.setsid();
 
     // Not Session Leader
-    if (try posix.fork() != 0) std.process.exit(0);
+    if (posix.errno(linux.fork()) != .SUCCESS) exit(0);
     _ = umask(0);
-    try std.posix.chdir("/");
+    if (posix.errno(linux.chdir("/")) != .SUCCESS) exit(1);
 
     // Reroute STDOUT/STDERR to DEV NULL
-    std.posix.close(posix.STDIN_FILENO);
-    const fd = try posix.open("/dev/null", .{ .ACCMODE = .RDWR }, 0);
+    _ = linux.close(posix.STDIN_FILENO);
+    const fd = linux.open("/dev/null", .{ .ACCMODE = .RDWR }, 0);
+    if (posix.errno(fd) != .SUCCESS) exit(1);
     if (fd != posix.STDIN_FILENO) {
         return error.InvalidFileNo;
     }
-    try std.posix.dup2(posix.STDIN_FILENO, posix.STDOUT_FILENO);
-    try std.posix.dup2(posix.STDIN_FILENO, posix.STDERR_FILENO);
-    try runServer();
+    if (posix.errno(linux.dup2(posix.STDIN_FILENO, posix.STDOUT_FILENO)) != .SUCCESS) exit(1);
+    if (posix.errno(linux.dup2(posix.STDIN_FILENO, posix.STDERR_FILENO)) != .SUCCESS) exit(1);
+    try runServer(init.io);
 }
 
-export fn handle_interrupt(signal: i32) void {
+export fn handle_interrupt(signal: linux.SIG) void {
     _ = signal;
-    posix.unlink(well_known_address) catch {};
-    posix.exit(1);
+    _ = linux.unlink(well_known_address);
+    linux.exit(1);
 }
 
 // TODO: Handle if linked to libc
 fn umask(mask: std.os.linux.mode_t) std.os.linux.mode_t {
-    return @as(std.os.linux.mode_t, std.os.linux.syscall1(.umask, mask));
+    return @as(u32, @truncate(std.os.linux.syscall1(.umask, mask)));
 }
 
-fn runServer() !void {
-    const fd = try posix.socket(AF.UNIX, SOCK.STREAM, 0);
+fn runServer(io: Io) !void {
+    var err = linux.socket(AF.UNIX, SOCK.STREAM, 0);
+    if (posix.errno(err) != .SUCCESS) return error.FailedToOpenSocket;
+    const fd = @as(i32, @truncate(@as(isize, @bitCast(err))));
     var addr: linux.sockaddr.un = undefined;
     addr.family = AF.UNIX;
     @memset(&addr.path, 0);
     // TODO: Truncate well_known_address if it is longer
     @memcpy(addr.path[0..well_known_address.len], well_known_address[0..]);
 
-    try posix.bind(fd, @ptrCast(&addr), @sizeOf(@TypeOf(addr)));
+    err = linux.bind(fd, @ptrCast(&addr), @sizeOf(@TypeOf(addr)));
+    if (posix.errno(err) != .SUCCESS) return error.FailedToBindToSocket;
     defer {
-        posix.close(fd);
-        posix.unlink(well_known_address) catch {
-            @panic("ERROR UNLINKING SOCKET!");
-        };
+        _ = linux.close(fd);
+        _ = linux.unlink(well_known_address);
     }
 
     log.debug("Listening on {s}...", .{well_known_address});
-    try posix.listen(fd, backlog);
+    err = linux.listen(fd, backlog);
+    if (posix.errno(err) != .SUCCESS) return error.FailedToListenOnSocket;
 
     var timer: ?pomo.PomoRecord = null;
 
     while (true) {
         defer @memset(msg_bfr[0..], 0);
-        const cfd = try posix.accept(fd, null, null, 0);
-        const stream = std.net.Stream{ .handle = cfd };
-        const writer = stream.writer();
+        err = linux.accept(fd, null, null);
+        if (posix.errno(err) != .SUCCESS) return error.AcceptFailure;
+        const cfd: i32 = @truncate(@as(isize, @bitCast(err)));
+        const stream: Io.File = .{ .handle = cfd, .flags = .{ .nonblocking = false } };
+        var writer = stream.writer(io, &res_bfr);
+        var w = &writer.interface;
         log.debug("Connection!", .{});
-        defer posix.close(cfd);
+        defer _ = linux.close(cfd);
 
         const n = posix.read(cfd, &msg_bfr) catch {
-            _ = posix.write(cfd, "-1") catch continue;
+            _ = linux.write(cfd, "-1", 2);
             continue;
         };
 
@@ -81,43 +87,46 @@ fn runServer() !void {
         if (std.mem.eql(u8, "start", cmd)) {
             log.debug("Recieved Start Command", .{});
             if (timer != null) {
-                _ = posix.write(cfd, "5") catch continue;
+                _ = linux.write(cfd, "5", 1);
                 continue;
             }
             const long_str = tokens.next() orelse {
-                _ = posix.write(cfd, "1") catch continue;
+                _ = linux.write(cfd, "1", 1);
                 continue;
             };
             const short_str = tokens.next() orelse {
-                _ = posix.write(cfd, "2") catch continue;
+                _ = linux.write(cfd, "2", 1);
                 continue;
             };
             const long = std.fmt.parseInt(i64, long_str, 10) catch {
-                _ = posix.write(cfd, "3") catch continue;
+                _ = linux.write(cfd, "3", 1);
                 continue;
             };
             const short = std.fmt.parseInt(i64, short_str, 10) catch {
-                _ = posix.write(cfd, "4") catch continue;
+                _ = linux.write(cfd, "4", 1);
                 continue;
             };
-            timer = .init(long, short);
-            _ = posix.write(cfd, "0") catch continue;
+            timer = .init(io, long, short);
+            _ = linux.write(cfd, "0", 1);
         } else if (std.mem.eql(u8, "status", cmd)) {
             log.debug("Recieved message {s}", .{msg_bfr});
             if (timer) |t| {
-                const status = t.status(std.time.timestamp());
+                const status = t.status(Io.Timestamp.now(io, .real).toSeconds());
                 log.debug("{any}", .{status});
-                status.serialize(writer) catch {
-                    _ = writer.write("-2") catch continue;
+                status.serialize(w) catch {
+                    _ = w.write("-2") catch continue;
                     continue;
                 };
+                w.flush() catch continue;
             } else {
-                _ = writer.write("-1") catch continue;
+                _ = w.write("-1") catch continue;
+                w.flush() catch continue;
                 continue;
             }
         } else if (std.mem.eql(u8, "stop", cmd)) {
             timer = null;
-            _ = writer.write("0") catch continue;
+            _ = w.write("0") catch continue;
+            w.flush() catch continue;
             continue;
         } else if (std.mem.eql(u8, "kill", cmd)) {
             break;
@@ -135,12 +144,16 @@ comptime {
     if (well_known_address.len > 108 - 1) @compileError("well_known_address is too long!");
 }
 
+const Io = std.Io;
 const SOCK = posix.SOCK;
 const AF = posix.AF;
 const backlog = 5;
 const message_limit = 100;
 var msg_bfr: [100]u8 = @splat(0);
+var res_bfr: [100]u8 = @splat(0);
 const log = std.log.scoped(.main);
+
+const exit = std.process.exit;
 
 test {
     _ = pomo.PomoRecord;
